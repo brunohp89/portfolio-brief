@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#151D1A" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Portfolio Brief</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<style>
+/* A thin shell: a status bar on top, the brief's own page in a sandboxed frame below. */
+:root {
+  color-scheme: light dark;
+  --bg: #F3F5F4; --surface: #FFFFFF; --ink: #14201B; --muted: #76827C; --rule: #DDE3E0;
+  --accent: #2a78d6; --accent-ink: #FFFFFF; --pos: #157347; --neg: #C2362B;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0E1412; --surface: #151D1A; --ink: #E6ECE9; --muted: #88958F; --rule: #27322E; --accent: #5598e7; --accent-ink: #0E1412; --pos: #43C07F; --neg: #EF7A72; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+[hidden] { display: none !important; }
+header {
+  display: flex; align-items: center; gap: 8px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) calc(12px + env(safe-area-inset-right, 0px)) 8px calc(12px + env(safe-area-inset-left, 0px));
+  background: var(--surface); border-bottom: 1px solid var(--rule);
+}
+h1 { margin: 0; font-size: 15px; font-weight: 600; white-space: nowrap; }
+#status { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#status.bad { color: var(--neg); white-space: normal; }
+@media (max-width: 480px) { h1 { font-size: 14px; } .btn { padding: 5px 8px; } }
+.btn { font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 7px; border: 1px solid var(--rule); background: var(--bg); color: var(--ink); cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn:disabled { opacity: .6; cursor: default; }
+.btn:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#frame { flex: 1; width: 100%; min-height: 0; border: 0; background: var(--bg); }
+#empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; color: var(--muted); text-align: center; }
+#connect { position: fixed; inset: 0; display: none; align-items: flex-start; justify-content: center; padding: 48px 12px; overflow: auto; background: rgba(0, 0, 0, .55); z-index: 10; }
+#connect.show { display: flex; }
+.card { width: min(520px, 100%); padding: 18px 20px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; display: flex; flex-direction: column; gap: 12px; }
+.card h2 { margin: 0; font-size: 16px; }
+.hint { color: var(--muted); font-size: 12.5px; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.field input { font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--rule); background: var(--bg); color: var(--ink); width: 100%; }
+.row { display: flex; gap: 8px; align-items: center; }
+#connect-msg { min-height: 1.4em; color: var(--neg); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Portfolio Brief</h1>
+  <span id="status" aria-live="polite"></span>
+  <button class="btn" id="btn-refresh" type="button">Aggiorna</button>
+  <button class="btn" id="btn-conn" type="button" title="Collegamento al Worker" aria-label="Collegamento">⚙</button>
+</header>
+
+<div id="empty">Nessun brief da mostrare.</div>
+<iframe id="frame" title="Portfolio Brief" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" hidden></iframe>
+
+<div id="connect">
+  <form class="card" id="connect-form" novalidate>
+    <h2>Collega il brief</h2>
+    <div class="hint">Il brief non è dentro questa pagina: arriva dal tuo Worker Cloudflare, che legge da Drive la pagina scritta dall'ultima esecuzione del Portfolio Brief. È lo stesso collegamento del Portfolio Tracker.</div>
+    <label class="field">URL del Worker<input id="conn-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://portfolio-snapshot.tuonome.workers.dev"></label>
+    <label class="field">Token<input id="conn-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <div class="row"><button class="btn primary" id="conn-submit" type="submit">Collega</button><button class="btn" id="conn-cancel" type="button">Annulla</button></div>
+    <div id="connect-msg" aria-live="polite"></div>
+    <div class="hint">URL e token restano solo in questo browser, insieme a una copia dell'ultimo brief per aprirlo anche senza rete.</div>
+  </form>
+</div>
+
+<script>
+(() => {
+'use strict';
+// "pt.conn" is shared with the Portfolio Tracker app (same origin, same Worker): connect once, both work.
+const LS = { conn: 'pt.conn', page: 'pb.page', frame: 'pb.frame' };
+const read = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
+const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } };
+const el = (id) => document.getElementById(id);
+const RECHECK_MS = 10 * 60 * 1000;
+
+let conn = read(LS.conn);   // { url, token }
+let page = read(LS.page);   // { etag, modified, checkedAt, html }
+let busy = null;
+let lastError = '';
+
+const LOCAL_PAGE = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+function cleanUrl(raw) {
+  let u = String(raw || '').trim().replace(/\/+$/, '').replace(/\/(snapshot|brief|check)$/, '');
+  if (u && !/^https?:\/\//i.test(u)) u = 'https://' + u;
+  try {
+    const p = new URL(u);
+    const local = LOCAL_PAGE && p.protocol === 'http:' && (p.hostname === 'localhost' || p.hostname === '127.0.0.1');
+    if (p.protocol !== 'https:' && !local) return '';
+    return p.origin + p.pathname.replace(/\/+$/, '');
+  } catch { return ''; }
+}
+const validPage = (p) => !!p && typeof p.html === 'string' && p.html.length > 200;
+const fmtWhen = (ms) => new Date(ms).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+// ---------- the brief's page, isolated ----------
+// The frame is sandboxed without same-origin: whatever the page contains, it cannot read this
+// origin's storage (where the Worker token lives). Its own small preferences (currency toggle)
+// go through a storage shim that asks this shell to keep them.
+const FRAME_KEY = /^pb-[a-z0-9-]{1,24}$/;
+function wrap(html) {
+  const prefs = read(LS.frame) || {};
+  const init = JSON.stringify(prefs).replace(/</g, '\\u003c');
+  const shim = `(() => { const mem = ${init}; const shim = {
+    getItem: (k) => (Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null),
+    setItem: (k, v) => { mem[k] = String(v); parent.postMessage({ type: 'pb-store', key: String(k), value: String(v) }, '*'); },
+    removeItem: (k) => { delete mem[k]; } };
+    try { Object.defineProperty(window, 'localStorage', { value: shim, configurable: true }); } catch (e) {} })();`;
+  return '<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base target="_blank">'
+    + '<style>:root{box-sizing:border-box}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style>'
+    + '<script>' + shim + '<\/script></head><body>' + html + '</body></html>';
+}
+window.addEventListener('message', (ev) => {
+  const d = ev.data;
+  if (ev.source !== el('frame').contentWindow || !d || d.type !== 'pb-store') return;
+  if (typeof d.key !== 'string' || !FRAME_KEY.test(d.key) || typeof d.value !== 'string' || d.value.length > 64) return;
+  const prefs = read(LS.frame) || {};
+  prefs[d.key] = d.value;
+  write(LS.frame, prefs);
+});
+
+function show() {
+  const has = validPage(page);
+  el('frame').hidden = !has;
+  el('empty').hidden = has;
+  if (has) el('frame').srcdoc = wrap(page.html);
+}
+function renderStatus() {
+  const s = el('status');
+  s.classList.toggle('bad', !!lastError);
+  if (lastError) { s.textContent = lastError; return; }
+  if (!conn) { s.textContent = 'Non collegato'; return; }
+  if (!validPage(page)) { s.textContent = busy ? 'Caricamento…' : 'Nessun brief scaricato'; return; }
+  s.textContent = `Esecuzione del ${fmtWhen(page.modified)}` + (busy ? ' · controllo…' : ` · controllato ${fmtWhen(page.checkedAt)}`);
+}
+
+// ---------- download ----------
+async function download(c, etag) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  let res;
+  try {
+    const headers = { Authorization: 'Bearer ' + c.token };
+    if (etag) headers['If-None-Match'] = etag;
+    res = await fetch(c.url + '/brief', { headers, cache: 'no-store', signal: ctrl.signal });
+  } catch {
+    throw { code: navigator.onLine === false ? 'offline' : 'network' };
+  } finally { clearTimeout(timer); }
+  if (res.status === 304) return { changed: false };
+  if (!res.ok) {
+    let body = null;
+    try { body = await res.json(); } catch { /* not JSON */ }
+    throw { code: (body && body.error) || 'http', message: (body && body.message) || 'HTTP ' + res.status };
+  }
+  const html = await res.text();
+  if (html.length <= 200) throw { code: 'bad_page' };
+  return { changed: true, html, etag: res.headers.get('ETag') || '', modified: Date.parse(res.headers.get('Last-Modified') || '') || Date.now() };
+}
+function errorText(err) {
+  switch (err && err.code) {
+    case 'offline': return 'Sei offline.';
+    case 'unauthorized': return 'Token rifiutato dal Worker.';
+    case 'not_found': return 'Questo Worker non conosce /brief: va aggiornato con il codice nuovo.';
+    case 'no_snapshot': return 'Il Worker risponde, ma nella cartella non c\'è ancora la pagina del brief: arriva con la prossima esecuzione.';
+    case 'bad_page': return 'La pagina ricevuta non è valida.';
+    case 'network': return 'Worker non raggiungibile: controlla la rete e l\'URL.';
+    default: return 'Il Worker ha risposto con un errore: ' + ((err && err.message) || (err && err.code) || 'sconosciuto') + '.';
+  }
+}
+function store(r) {
+  page = { etag: r.etag, modified: r.modified, checkedAt: Date.now(), html: r.html };
+  if (!write(LS.page, page)) write(LS.page, null); // no room for the offline copy: carry on without it
+}
+
+/** Looks for a newer run and shows it. Never throws. */
+function refresh() {
+  if (busy) return busy;
+  if (!conn) { openConnect(); return Promise.resolve(false); }
+  busy = (async () => {
+    lastError = ''; renderStatus();
+    try {
+      const r = await download(conn, validPage(page) ? page.etag : '');
+      if (r.changed) { store(r); show(); }
+      else { page.checkedAt = Date.now(); write(LS.page, page); }
+      return true;
+    } catch (err) {
+      // With a cached brief on screen, being offline is not worth a red line.
+      lastError = err && err.code === 'offline' && validPage(page) ? '' : errorText(err);
+      return false;
+    }
+  })();
+  busy.finally(() => { busy = null; el('btn-refresh').disabled = false; renderStatus(); });
+  el('btn-refresh').disabled = true;
+  renderStatus();
+  return busy;
+}
+
+// ---------- connection ----------
+function openConnect(message) {
+  el('conn-url').value = conn ? conn.url : '';
+  el('conn-token').value = '';
+  el('conn-token').placeholder = conn ? 'Lascia vuoto per tenere quello attuale' : '';
+  el('connect-msg').textContent = message || '';
+  el('conn-cancel').hidden = !validPage(page);
+  el('connect').classList.add('show');
+}
+el('btn-conn').onclick = () => openConnect();
+el('conn-cancel').onclick = () => el('connect').classList.remove('show');
+el('btn-refresh').onclick = () => refresh();
+el('connect-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const url = cleanUrl(el('conn-url').value);
+  const token = el('conn-token').value.trim() || (conn && conn.url === url ? conn.token : '');
+  if (!url) { el('connect-msg').textContent = 'Serve un indirizzo https, ad esempio https://portfolio-snapshot.tuonome.workers.dev'; return; }
+  if (!token) { el('connect-msg').textContent = 'Inserisci il token.'; return; }
+  const btn = el('conn-submit');
+  btn.disabled = true; btn.textContent = 'Collegamento…';
+  try {
+    const r = await download({ url, token }, '');
+    conn = { url, token }; write(LS.conn, conn);
+    lastError = '';
+    store(r); show();
+    el('connect').classList.remove('show');
+  } catch (err) {
+    el('connect-msg').textContent = errorText(err);
+  } finally { btn.disabled = false; btn.textContent = 'Collega'; renderStatus(); }
+});
+
+// ---------- boot ----------
+if (!validPage(page)) page = null;
+if (conn && !(typeof conn.token === 'string' && cleanUrl(conn.url) === conn.url)) conn = null;
+show();
+renderStatus();
+if (conn) refresh(); else openConnect();
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && conn && Date.now() - ((page && page.checkedAt) || 0) > RECHECK_MS) refresh();
+});
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(() => {}); });
+}
+})();
+</script>
+</body>
+</html>
