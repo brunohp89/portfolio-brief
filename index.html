@@ -33,7 +33,15 @@ header {
 h1 { margin: 0; font-size: 15px; font-weight: 600; white-space: nowrap; }
 #status { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #status.bad { color: var(--neg); white-space: normal; }
-@media (max-width: 480px) { h1 { font-size: 14px; } .btn { padding: 5px 8px; } }
+/* Phones: the brief carries its own title, so the bar gives its room to the run and check times (two lines). */
+@media (max-width: 480px) {
+  h1 { display: none; }
+  .btn { padding: 5px 8px; }
+  #status { font-size: 11.5px; line-height: 1.3; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+}
+@media (pointer: coarse) { header .btn { padding-top: 7px; padding-bottom: 7px; } }
+/* Edge-to-edge display (viewport-fit=cover): the frame ends above the gesture bar; 0 elsewhere. */
+body { padding-bottom: env(safe-area-inset-bottom, 0px); }
 .btn { font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 7px; border: 1px solid var(--rule); background: var(--bg); color: var(--ink); cursor: pointer; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .btn:disabled { opacity: .6; cursor: default; }
@@ -78,7 +86,9 @@ h1 { margin: 0; font-size: 15px; font-weight: 600; white-space: nowrap; }
 (() => {
 'use strict';
 // "pt.conn" is shared with the Portfolio Tracker app (same origin, same Worker): connect once, both work.
-const LS = { conn: 'pt.conn', page: 'pb.page', frame: 'pb.frame' };
+// "pb.checked" holds the time of the last check on its own, so a check that finds nothing new does not
+// rewrite the whole page (hundreds of KB) in localStorage.
+const LS = { conn: 'pt.conn', page: 'pb.page', frame: 'pb.frame', checked: 'pb.checked' };
 const read = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
 const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } };
 const el = (id) => document.getElementById(id);
@@ -164,7 +174,8 @@ async function download(c, etag) {
   }
   const html = await res.text();
   if (html.length <= 200) throw { code: 'bad_page' };
-  return { changed: true, html, etag: res.headers.get('ETag') || '', modified: Date.parse(res.headers.get('Last-Modified') || '') || Date.now() };
+  // X-File-Version carries the same value as the ETag, which Cloudflare removes from HTML answers.
+  return { changed: true, html, etag: res.headers.get('ETag') || res.headers.get('X-File-Version') || '', modified: Date.parse(res.headers.get('Last-Modified') || '') || Date.now() };
 }
 function errorText(err) {
   switch (err && err.code) {
@@ -180,6 +191,12 @@ function errorText(err) {
 function store(r) {
   page = { etag: r.etag, modified: r.modified, checkedAt: Date.now(), html: r.html };
   if (!write(LS.page, page)) write(LS.page, null); // no room for the offline copy: carry on without it
+  write(LS.checked, page.checkedAt);
+}
+function markChecked() {
+  if (!page) return;
+  page.checkedAt = Date.now();
+  write(LS.checked, page.checkedAt);
 }
 
 /** Looks for a newer run and shows it. Never throws. */
@@ -190,8 +207,11 @@ function refresh() {
     lastError = ''; renderStatus();
     try {
       const r = await download(conn, validPage(page) ? page.etag : '');
+      // Cloudflare drops the ETag of HTML answers, so an unchanged brief comes back whole instead of
+      // as a 304. Redrawing it would reload the page in the frame and lose the scroll position.
+      if (r.changed && validPage(page) && r.html === page.html) r.changed = false;
       if (r.changed) { store(r); show(); }
-      else { page.checkedAt = Date.now(); write(LS.page, page); }
+      else markChecked();
       return true;
     } catch (err) {
       // With a cached brief on screen, being offline is not worth a red line.
@@ -238,6 +258,7 @@ el('connect-form').addEventListener('submit', async (ev) => {
 
 // ---------- boot ----------
 if (!validPage(page)) page = null;
+if (page) page.checkedAt = Math.max(page.checkedAt || 0, read(LS.checked) || 0);
 if (conn && !(typeof conn.token === 'string' && cleanUrl(conn.url) === conn.url)) conn = null;
 show();
 renderStatus();

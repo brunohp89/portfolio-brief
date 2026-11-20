@@ -2,7 +2,7 @@
 // Only same-origin files are cached. The brief page and every other cross-origin
 // request go straight to the network, so nothing private or stale is served from here.
 // Bump CACHE when shipping a change that must drop previously cached files.
-const CACHE = "brief-shell-v1";
+const CACHE = "brief-shell-v2";
 const SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png", "./icon-maskable-512.png"];
 const NETWORK_TIMEOUT_MS = 2500;
 
